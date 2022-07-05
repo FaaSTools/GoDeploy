@@ -1,0 +1,21 @@
+functions:
+  - archive: "<ABSOLUTE_PATH_TO_ARCHIVE>" # Corresponds to a zip file with all the code and ints dependencies
+    name: "testPython" # Name of the deployed function 
+    memory: 128
+    timeout: 300
+    providers:
+      - name: "AWS" # Valid values are AWS|Google
+        handler: "main.lambda_handler" # Follows the format <HANDLER_FILE>.<HANDLER_METHOD>
+        regions:
+          - "us-east-1" # List of regions
+        runtime: "python3.9"
+  - archive: "<ABSOLUTE_PATH_TO_ARCHIVE>" # For Java this can also be a jar file
+    name: "testJava"
+    memory: 128
+    timeout: 300
+    providers:
+      - name: "AWS"
+        handler: "Handler.handleRequest"
+        regions:
+          - "us-east-1"
+        runtime: "java11"
