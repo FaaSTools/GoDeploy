@@ -10,13 +10,13 @@ FaaS providers, i.e., AWS Lambda and Google Cloud Functions.
 _aws-credentials.yaml:_
 
 ````yaml
-labRole: "<FUNCTION_USER_GROUP>"
+role: "<FUNCTION_USER_GROUP>"
 aws_access_key_id: "<ACCESS_KEY_ID>"
 aws_secret_access_key: "<SECRET_ACCESS_KEY>"
 aws_session_token: "<SESSION_TOKEN>"
 ````
 
-Info: When using this library in combination with the _AWSAcademy_ course **labRole** will most likely be _RoleUser_.
+Info: When using this library in combination with the _AWSAcademy_ course, **role** will most likely be _LabRole_.
 
 _gcp-credentials.yaml:_
 
