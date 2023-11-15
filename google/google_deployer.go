@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 var copyArchiveLock sync.Mutex
@@ -41,11 +42,14 @@ func Deploy(waitGroup *sync.WaitGroup, de shared.Deployment, credentialsHolder s
 	defer functionsClient.Close()
 
 	deployedFunctions = getDeployedFunctions(functionsClient)
-	shared.Log(shared.ProviderGoogle, fmt.Sprintf("Deployed functions: %v", deployedFunctions))
+	// shared.Log(shared.ProviderGoogle, fmt.Sprintf("Deployed functions: %v", deployedFunctions))
 
+	start := time.Now()
 	//Check if archive is already present in the storage
 	archiveURL := uploadArchive(de.Archive, de.Name, storageClient)
-	shared.Log(shared.ProviderGoogle, fmt.Sprintf("Location of archive: %v", archiveURL))
+	elapsed := time.Since(start)
+
+	shared.Log(shared.ProviderGoogle, fmt.Sprintf("Location of archive: %v, region: %v, upload took %s", archiveURL, de.Region, elapsed))
 	de.Archive = archiveURL
 
 	if shared.Any(deployedFunctions, func(s string) bool { return strings.Contains(s, de.Region) && strings.Contains(s, de.Name) }) {
@@ -75,7 +79,7 @@ func uploadArchive(archiveURL string, name string, storageClient *storage.Client
 
 	_, err := bucketHandle.Attrs(context.Background())
 	if err != nil {
-		if strings.Contains(err.Error(), "bucket doesn't exist") {
+		if ((strings.Contains(err.Error(), "bucket doesn't exist")) || (strings.Contains(err.Error(), "not exist"))) {
 			shared.Log(shared.ProviderGoogle, fmt.Sprintf("Bucket %v doesn't exist, creating new one", shared.ArchiveBucketName))
 
 			err = bucketHandle.Create(context.Background(), viper.GetString(shared.GoogleProjectID), nil)
@@ -105,6 +109,7 @@ func uploadArchive(archiveURL string, name string, storageClient *storage.Client
 func createFunction(d shared.Deployment, functionsClient *functions.CloudFunctionsClient) {
 	shared.Log(shared.ProviderGoogle, fmt.Sprintf("Started creating function %v in region %v with %v MB memory", d.Name, d.Region, d.MemorySize))
 
+	start := time.Now()
 	projectID := viper.GetString(shared.GoogleProjectID)
 	sourceArchive := &functions2.CloudFunction_SourceArchiveUrl{SourceArchiveUrl: d.Archive}
 	timeout := &durationpb.Duration{
@@ -134,8 +139,10 @@ func createFunction(d shared.Deployment, functionsClient *functions.CloudFunctio
 
 	poll, err := createFunctionOperation.Wait(context.Background())
 	shared.CheckErr(err, fmt.Sprintf("unable to wait for function deployment, Error: %v", err))
+	
+	elapsed := time.Since(start)
 
-	shared.Log(shared.ProviderGoogle, fmt.Sprintf("Finished creating function %v in region %v with %v MB memory", poll.Name, d.Region, d.MemorySize))
+	shared.Log(shared.ProviderGoogle, fmt.Sprintf("Finished creating function %v in region %v with %v MB memory, took %s", poll.Name, d.Region, d.MemorySize, elapsed))
 }
 
 func updateFunction(d shared.Deployment, functionsClient *functions.CloudFunctionsClient) {

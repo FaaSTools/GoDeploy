@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 //Map that stores the already created buckets
@@ -32,7 +33,12 @@ func Deploy(waitGroup *sync.WaitGroup, d shared.Deployment, credentialsHolder sh
 	lambdaClient := lambda.NewFromConfig(cfg)
 	s3Client := s3.NewFromConfig(cfg)
 
+	start := time.Now()
 	bucketName, objectKey := uploadArchive(s3Client, d.Region, d.Name, d.Archive)
+	elapsed := time.Since(start)
+	
+	shared.Log(shared.ProviderAWS, fmt.Sprintf("Name: %v, Region: %v, upload took %s", d.Name, d.Region, elapsed))
+
 	d.Bucket = bucketName
 	d.Key = objectKey
 
@@ -115,6 +121,8 @@ func SetupConfig(region string, c shared.CredentialsHolder) aws.Config {
 
 func createFunction(client *lambda.Client, d shared.Deployment, role string) string {
 	shared.Log(shared.ProviderAWS, fmt.Sprintf("Started creating function %v in region %v with %v MB memory", d.Name, d.Region, d.MemorySize))
+	
+	start := time.Now()
 	handler := d.HandlerFile
 
 	if strings.Contains(d.Runtime, "python") {
@@ -133,34 +141,57 @@ func createFunction(client *lambda.Client, d shared.Deployment, role string) str
 	}
 
 	createdFunction, err := client.CreateFunction(context.Background(), params)
-	shared.CheckErr(err, fmt.Sprintf("Error: unable to create function %v, Error %v", *params.FunctionName, err))
 
-	shared.Log(shared.ProviderAWS, fmt.Sprintf("Finished creating function %v in region %v with %v MB memory", d.Name, d.Region, d.MemorySize))
+	if err != nil && strings.Contains(err.Error(), "https response error StatusCode: 409") && 
+		strings.Contains(err.Error(), "ResourceConflictException: Function already exist") {
+		shared.Log(shared.ProviderAWS, fmt.Sprintf("Function %v in region %v already exists. Updating function...", d.Name, d.Region))
+		return updateFunction(client, d, role, start)
+	} else {
+		shared.CheckErr(err, fmt.Sprintf("Error: unable to create function %v, Error %v", *params.FunctionName, err))
+	}
+
+	elapsed := time.Since(start)
+	shared.Log(shared.ProviderAWS, fmt.Sprintf("Finished creating function %v in region %v with %v MB memory, took %s", d.Name, d.Region, d.MemorySize, elapsed))
 	return *createdFunction.FunctionArn
 }
 
-//TODO Implement update
-func updateFunction(client *lambda.Client, d shared.Deployment, role string) {
+func updateFunction(client *lambda.Client, d shared.Deployment, role string, start time.Time) string {
 	shared.Log(shared.ProviderAWS, fmt.Sprintf("Started updating function %v in region %v with %v MB memory", d.Name, d.Region, d.MemorySize))
 
 	configurationParams := &lambda.UpdateFunctionConfigurationInput{
 		FunctionName: &d.Name,
 		Handler:      &d.HandlerFile,
+		Timeout:      &d.Timeout,
 		MemorySize:   &d.MemorySize,
 		Role:         &role,
 		Runtime:      types.Runtime(d.Runtime),
 	}
-	_, err := client.UpdateFunctionConfiguration(context.Background(), configurationParams)
+	updatedFunction, err := client.UpdateFunctionConfiguration(context.Background(), configurationParams)
 	shared.CheckErr(err, fmt.Sprintf("unable to update function configuration, Error: %v", err))
 
-	_, err = client.UpdateFunctionCode(context.Background(), &lambda.UpdateFunctionCodeInput{
-		FunctionName: &d.Name,
-		S3Bucket:     &d.Bucket,
-		S3Key:        &d.Key,
-	})
-	shared.CheckErr(err, fmt.Sprintf("unable to update function code, Error: %v", err))
+	maxRetries := 5
+	retryDelay := 500 * time.Millisecond
 
-	shared.Log(shared.ProviderAWS, fmt.Sprintf("Finished updating function %v in region %v with %v MB memory", d.Name, d.Region, d.MemorySize))
+	for i := 0; i < maxRetries; i++ {
+        _, err = client.UpdateFunctionCode(context.Background(), &lambda.UpdateFunctionCodeInput{
+			FunctionName: &d.Name,
+			S3Bucket:     &d.Bucket,
+			S3Key:        &d.Key,
+		})
+		if err != nil && strings.Contains(err.Error(), "ResourceConflictException: The operation cannot be performed at this time. An update is in progress for resource") {
+			shared.Log(shared.ProviderAWS, fmt.Sprintf("Config-update in progress, retrying updating code in %v... (Attempt %d/%d)", retryDelay, i+1, maxRetries))
+			time.Sleep(retryDelay)
+			continue
+		} else {
+			break
+		}
+    }
+
+	shared.CheckErr(err, fmt.Sprintf("unable to update function code, Error: %v", err))
+	elapsed := time.Since(start)
+	shared.Log(shared.ProviderAWS, fmt.Sprintf("Finished updating function %v in region %v with %v MB memory, took %s", d.Name, d.Region, d.MemorySize, elapsed))
+
+	return *updatedFunction.FunctionArn
 }
 
 func getDeployedFunctions(c *lambda.Client) *lambda.ListFunctionsOutput {
